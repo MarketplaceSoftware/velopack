@@ -50,6 +50,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          # A published asset is pinned by its SHA-256 in e-manage|ONE's pipeline, so a rerun never replaces it.
+          gh release view $env:GITHUB_REF_NAME --repo $env:GITHUB_REPOSITORY *> $null
+          if ($LASTEXITCODE -eq 0) {
+            "Release $env:GITHUB_REF_NAME already exists; leaving its assets as published." >> $env:GITHUB_STEP_SUMMARY
+            exit 0
+          }
           gh release create $env:GITHUB_REF_NAME artifacts\update.exe artifacts\update.pdb artifacts\SHA256SUMS `
             --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title $env:GITHUB_REF_NAME `
             --notes "x86 Update.exe for vpk 1.2.161 with velopack/velopack#1160 (built from $env:GITHUB_SHA). SHA-256 in SHA256SUMS."
