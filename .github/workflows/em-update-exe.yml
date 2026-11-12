@@ -1,0 +1,55 @@
+# MarketplaceSoftware fork only. Builds the x86 Update.exe that vpk 1.2.161 packs when no --runtime is given
+# (vendor\update.exe), from this branch: tag 1.2.161 plus velopack/velopack#1160, which stops shortcut updates from
+# stamping the main exe's icon and AUMID onto shortcuts to other executables in the package. A tag em-* publishes it
+# as a release asset with its SHA-256; e-manage|ONE's release pipeline downloads that asset and checks the hash.
+name: em update.exe
+on:
+  push:
+    tags: ['em-*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-2025
+    env:
+      RUSTFLAGS: -C target-feature=+crt-static
+    steps:
+      - uses: actions/checkout@v4
+      - name: Stamp the version
+        # 1.2.161 plus a prerelease marker, so the file version stays 1.2.161 and the product version names the patch.
+        shell: pwsh
+        run: |
+          $v = '1.2.161-em.1160'
+          (Get-Content Cargo.toml) -replace '^version\s*=\s*".*"', "version = `"$v`"" | Set-Content Cargo.toml
+          (Get-Content Cargo.lock -Raw) -replace '"0\.0\.0-local"', "`"$v`"" | Set-Content Cargo.lock -NoNewline
+      - name: Build update.exe (x86)
+        shell: pwsh
+        run: |
+          rustup target add i686-pc-windows-msvc
+          cargo build --locked --release --target i686-pc-windows-msvc --features windows -p velopack_bins --bin update
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory artifacts | Out-Null
+          Copy-Item target\i686-pc-windows-msvc\release\update.exe artifacts\update.exe
+          Copy-Item target\i686-pc-windows-msvc\release\update.pdb artifacts\update.pdb
+          $info = (Get-Item artifacts\update.exe).VersionInfo
+          "FileVersion $($info.FileVersion), ProductVersion $($info.ProductVersion)"
+          if ($info.ProductVersion -ne '1.2.161-em.1160') { throw "unexpected product version $($info.ProductVersion)" }
+          $hash = (Get-FileHash artifacts\update.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  update.exe" | Set-Content artifacts\SHA256SUMS -NoNewline
+          "update.exe SHA-256: $hash" >> $env:GITHUB_STEP_SUMMARY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: update-exe
+          path: artifacts/
+      - name: Publish the release
+        if: startsWith(github.ref, 'refs/tags/em-')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:GITHUB_REF_NAME artifacts\update.exe artifacts\update.pdb artifacts\SHA256SUMS `
+            --repo $env:GITHUB_REPOSITORY --target $env:GITHUB_SHA --title $env:GITHUB_REF_NAME `
+            --notes "x86 Update.exe for vpk 1.2.161 with velopack/velopack#1160 (built from $env:GITHUB_SHA). SHA-256 in SHA256SUMS."
